@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Monash Quiz Show</title>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
+<style>
+  :root{
+    --blue:#006DAE; --navy:#0B2545; --ink:#10223a; --bg:#f3f6fa; --white:#fff;
+    --a:#006DAE; --b:#E39B26; --c:#00988F; --d:#8A3FA8; --e:#C8384A; --f:#5A6B7D;
+    --ok:#1f9d55; --bad:#d64545;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink);-webkit-tap-highlight-color:transparent}
+  button{font:inherit;cursor:pointer;border:0}
+  .hidden{display:none!important}
+
+  /* ---------- top bar ---------- */
+  .bar{display:flex;align-items:center;justify-content:space-between;padding:14px 28px;background:var(--navy);color:#fff}
+  .brand{font-weight:800;letter-spacing:.5px;font-size:20px}
+  .brand span{color:#7cc3ee;font-weight:600}
+  .bar .meta{font-size:16px;opacity:.85}
+  .bar button{background:rgba(255,255,255,.12);color:#fff;padding:8px 14px;border-radius:8px;margin-left:8px;font-size:14px}
+
+  /* ---------- generic ---------- */
+  .wrap{max-width:1280px;margin:0 auto;padding:28px}
+  .btn{background:var(--blue);color:#fff;padding:14px 26px;border-radius:12px;font-weight:700;font-size:18px}
+  .btn.big{font-size:24px;padding:18px 40px}
+  .btn.ghost{background:#e3eaf2;color:var(--ink)}
+  .btn:disabled{opacity:.4;cursor:not-allowed}
+  .card{background:#fff;border-radius:18px;box-shadow:0 6px 24px rgba(16,34,58,.08);padding:26px}
+
+  /* ---------- host lobby ---------- */
+  .lobby{display:grid;grid-template-columns:420px 1fr;gap:28px;align-items:start}
+  .qrbox{text-align:center}
+  .qrbox #qr svg{width:100%;height:auto;display:block}
+  .code{font-size:56px;font-weight:900;letter-spacing:8px;color:var(--blue);margin-top:10px}
+  .url{font-size:14px;color:#5a6b7d;word-break:break-all;margin-top:6px}
+  .warn{background:#fff4d6;color:#7a5600;border-radius:10px;padding:10px 12px;font-size:14px;margin-top:12px;text-align:left}
+  .players-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+  .players-head h2{font-size:28px}
+  .count{font-size:48px;font-weight:900;color:var(--blue)}
+  .chips{display:flex;flex-wrap:wrap;gap:10px;min-height:120px;align-content:flex-start}
+  .chip{background:#e8f2fa;color:var(--navy);padding:10px 16px;border-radius:999px;font-weight:700;font-size:18px;animation:pop .25s ease}
+  @keyframes pop{from{transform:scale(.6);opacity:0}to{transform:scale(1);opacity:1}}
+  .lobby-actions{display:flex;gap:12px;margin-top:22px;flex-wrap:wrap}
+  .status{font-size:14px;color:#5a6b7d;margin-top:8px}
+  .editor textarea{width:100%;min-height:340px;font:15px/1.5 Consolas,monospace;border:1px solid #cfd8e3;border-radius:10px;padding:12px}
+  .editor .help{font-size:14px;color:#5a6b7d;margin:8px 0 12px}
+
+  /* ---------- host question ---------- */
+  .qtop{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
+  .qnum{font-size:22px;font-weight:700;color:#5a6b7d}
+  .timer{width:96px;height:96px;border-radius:50%;background:var(--navy);color:#fff;display:flex;align-items:center;justify-content:center;font-size:40px;font-weight:900}
+  .answered{font-size:22px;font-weight:700;text-align:right}
+  .answered b{font-size:40px;color:var(--blue);display:block}
+  .qtext{font-size:44px;font-weight:800;line-height:1.2;background:#fff;border-radius:18px;padding:36px;text-align:center;box-shadow:0 6px 24px rgba(16,34,58,.08);margin-bottom:24px}
+  .opts{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  .opt{display:flex;align-items:center;gap:18px;color:#fff;border-radius:16px;padding:26px 28px;font-size:30px;font-weight:700;position:relative;overflow:hidden;transition:opacity .3s}
+  .opt .L{width:58px;height:58px;flex:none;border-radius:12px;background:rgba(255,255,255,.22);display:flex;align-items:center;justify-content:center;font-size:30px;font-weight:900}
+  .opt .n{margin-left:auto;font-size:30px;font-weight:900}
+  .opt.dim{opacity:.28}
+  .opt.right{outline:6px solid #fff;box-shadow:0 0 0 10px var(--ok)}
+  .opt .barfill{position:absolute;left:0;bottom:0;height:8px;background:rgba(255,255,255,.7)}
+  .o0{background:var(--a)}.o1{background:var(--b)}.o2{background:var(--c)}.o3{background:var(--d)}.o4{background:var(--e)}.o5{background:var(--f)}
+  .host-next{display:flex;justify-content:flex-end;margin-top:24px;gap:12px}
+
+  /* ---------- leaderboard ---------- */
+  .board h2{font-size:40px;text-align:center;margin-bottom:24px}
+  .row{display:flex;align-items:center;background:#fff;border-radius:14px;padding:18px 24px;margin:0 auto 12px;max-width:900px;font-size:28px;font-weight:700;box-shadow:0 4px 14px rgba(16,34,58,.07);animation:slide .35s ease both}
+  .row .r{width:60px;color:var(--blue);font-weight:900}
+  .row .s{margin-left:auto;font-weight:900}
+  .row .g{font-size:18px;color:var(--ok);margin-left:14px;width:70px;text-align:right}
+  @keyframes slide{from{transform:translateY(16px);opacity:0}to{transform:none;opacity:1}}
+  .podium{display:flex;justify-content:center;align-items:flex-end;gap:24px;margin:30px 0}
+  .pod{width:260px;text-align:center}
+  .pod .nm{font-size:28px;font-weight:800;margin-bottom:6px;word-break:break-word}
+  .pod .sc{font-size:20px;color:#5a6b7d;margin-bottom:10px}
+  .pod .blk{border-radius:14px 14px 0 0;color:#fff;font-size:64px;font-weight:900;display:flex;align-items:flex-start;justify-content:center;padding-top:14px}
+  .p1 .blk{height:240px;background:var(--blue)}.p2 .blk{height:170px;background:#4f8fc0}.p3 .blk{height:120px;background:#8fb8d8}
+
+  /* ---------- player (phone) ---------- */
+  .phone{min-height:100%;display:flex;flex-direction:column}
+  .phone .bar{padding:12px 16px}
+  .phone .brand{font-size:17px}
+  .pbody{flex:1;display:flex;flex-direction:column;justify-content:center;padding:20px;gap:16px;text-align:center}
+  .pbody h1{font-size:26px}
+  .pbody p{font-size:17px;color:#5a6b7d}
+  .inp{width:100%;font-size:22px;padding:16px;border-radius:12px;border:2px solid #cfd8e3;text-align:center}
+  .inp:focus{outline:none;border-color:var(--blue)}
+  .pq{font-size:19px;font-weight:700;line-height:1.35;background:#fff;border-radius:14px;padding:16px;box-shadow:0 4px 14px rgba(16,34,58,.07)}
+  .pt{font-size:15px;color:#5a6b7d}
+  .popts{display:flex;flex-direction:column;gap:12px}
+  .popt{display:flex;align-items:center;gap:14px;color:#fff;border-radius:14px;padding:18px;font-size:19px;font-weight:700;text-align:left;min-height:68px}
+  .popt .L{width:42px;height:42px;flex:none;border-radius:10px;background:rgba(255,255,255,.22);display:flex;align-items:center;justify-content:center;font-weight:900;font-size:22px}
+  .popt:active{transform:scale(.98)}
+  .result{border-radius:20px;color:#fff;padding:34px 20px}
+  .result.ok{background:var(--ok)}.result.bad{background:var(--bad)}.result.neutral{background:var(--navy)}
+  .result .big{font-size:34px;font-weight:900}
+  .result .sub{font-size:20px;margin-top:10px;opacity:.95}
+  .pname{font-weight:800;color:var(--navy)}
+  .spinner{width:44px;height:44px;border:5px solid #d6e3ef;border-top-color:var(--blue);border-radius:50%;margin:0 auto;animation:spin 1s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .final-rank{font-size:84px;font-weight:900;color:var(--blue);line-height:1}
+
+  @media (max-width:900px){
+    .lobby{grid-template-columns:1fr}
+    .opts{grid-template-columns:1fr}
+    .qtext{font-size:28px;padding:22px}
+    .opt{font-size:22px;padding:18px}
+  }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+/* =========================================================
+   MONASH QUIZ SHOW — chơi nhiều người qua QR, không cần tài khoản
+   - Mở trang bình thường  => màn hình MC (host)
+   - Mở trang với ?room=XXXX => màn hình người chơi (điện thoại)
+   Bộ câu hỏi mặc định ở dưới; MC có thể dán bộ mới ngay trên màn hình chờ.
+   ========================================================= */
+
+const DEFAULT_QUESTIONS_TEXT = `1. Where is Monash University primarily located?
+A. Sydney, New South Wales
+B. Melbourne, Victoria
+C. Brisbane, Queensland
+Answer: B
+
+2. Which group of universities is Monash University a member of?
+A. Group of Eight (Go8)
+B. Russell group
+C. Ivy League
+Answer: A
+
+3. What is Monash University's ranking according to the QS World University Rankings 2027?
+A. 35
+B. 33
+C. 31
+Answer: C
+
+4. How many faculties does Monash University have?
+A. 10
+B. 9
+C. 8
+Answer: A
+
+5. Which subject at Monash University is currently ranked 2nd in the world according to the QS World University Rankings by Subject 2026?
+A. Education
+B. Business
+C. Pharmacy
+Answer: C`;
+
+const SECONDS_PER_QUESTION = 20;   // thời gian mỗi câu
+const MAX_POINTS = 1000;           // trả lời đúng ngay lập tức
+const MIN_POINTS = 500;            // trả lời đúng ở giây cuối
+const PREFIX = "monash-quiz-show-";
+const LETTERS = "ABCDEF";
+
+/* ---------- tiện ích ---------- */
+const $ = (s, el=document) => el.querySelector(s);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const store = {
+  get(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } },
+  set(k,v){ try{ localStorage.setItem(k,v); }catch(e){} }
+};
+function randCode(n=5){ const a="ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; let s=""; for(let i=0;i<n;i++) s+=a[Math.floor(Math.random()*a.length)]; return s; }
+function rid(){ return Math.random().toString(36).slice(2)+Date.now().toString(36); }
+const PEER_OPTS = { config:{ iceServers:[ {urls:"stun:stun.l.google.com:19302"}, {urls:"stun:stun1.l.google.com:19302"} ] } };
+
+function parseQuestions(text){
+  const qs = []; let cur = null;
+  for (const raw of text.split(/\r?\n/)){
+    const line = raw.trim(); if(!line) continue;
+    let m;
+    if ((m = line.match(/^(?:answer|đáp án|dap an)\s*[:：]\s*([A-F])/i))){
+      if (cur) cur.correct = LETTERS.indexOf(m[1].toUpperCase());
+    } else if ((m = line.match(/^([A-F])[\.\)]\s*(.+)$/)) && cur){
+      cur.options.push(m[2]);
+    } else if ((m = line.match(/^\d+\s*[\.\)]\s*(.+)$/))){
+      cur = { q:m[1], options:[], correct:-1 }; qs.push(cur);
+    } else if (cur && cur.options.length===0){
+      cur.q += " " + line;
+    }
+  }
+  const errors = [];
+  qs.forEach((q,i)=>{
+    if (q.options.length<2) errors.push(`Câu ${i+1}: cần ít nhất 2 đáp án`);
+    if (q.correct<0 || q.correct>=q.options.length) errors.push(`Câu ${i+1}: thiếu hoặc sai dòng "Answer:"`);
+  });
+  if (!qs.length) errors.push("Chưa đọc được câu hỏi nào");
+  return { qs, errors };
+}
+
+/* ----- chế độ thử (demo): giả lập mạng qua trang mẹ, không dùng ở bản thật ----- */
+const DEMO = window.MQS_DEMO || null;
+if (DEMO){
+  class FakeConn{
+    constructor(cid, peerId, remote){ this.cid=cid; this.peerId=peerId; this.remote=remote; this.open=false; this.h={}; }
+    on(e,f){ (this.h[e]=this.h[e]||[]).push(f); }
+    emit(e,a){ (this.h[e]||[]).forEach(f=>f(a)); }
+    send(d){ parent.postMessage({mqs:"data", cid:this.cid, to:this.remote, d:JSON.parse(JSON.stringify(d))}, "*"); }
+    close(){ this.open=false; }
+  }
+  const conns = {};
+  window.Peer = class{
+    constructor(id){ this.id = typeof id==="string" ? id : "p-"+Math.random().toString(36).slice(2); this.h={}; this.open=false; this.destroyed=false;
+      parent.postMessage({mqs:"hello", id:this.id}, "*");
+      setTimeout(()=>{ this.open=true; this.emit("open", this.id); }, 50); }
+    on(e,f){ (this.h[e]=this.h[e]||[]).push(f); }
+    emit(e,a){ (this.h[e]||[]).forEach(f=>f(a)); }
+    connect(remote){ const cid=this.id+"~"+Math.random().toString(36).slice(2); const c=new FakeConn(cid,this.id,remote); conns[cid]=c;
+      parent.postMessage({mqs:"connect", cid, from:this.id, to:remote}, "*"); return c; }
+    reconnect(){} destroy(){ this.destroyed=true; }
+  };
+  window.addEventListener("message", ev=>{
+    const m = ev.data; if (!m || !m.mqs) return;
+    if (m.mqs==="incoming"){ const c=new FakeConn(m.cid, m.to, m.from); c.open=true; conns[m.cid]=c;
+      const p = window.__mqsPeer; if (p) p.emit("connection", c); setTimeout(()=>c.emit("open"),10);
+      parent.postMessage({mqs:"accepted", cid:m.cid, to:m.from}, "*"); }
+    if (m.mqs==="accepted"){ const c=conns[m.cid]; if (c){ c.open=true; c.emit("open"); } }
+    if (m.mqs==="data"){ const c=conns[m.cid]; if (c) c.emit("data", m.d); }
+  });
+}
+
+const params = new URLSearchParams(location.search);
+const ROOM = DEMO ? (DEMO.role==="player" ? DEMO.room : "") : (params.get("room")||"").toUpperCase().trim();
+if (ROOM) startPlayer(ROOM); else startHost();
+
+/* =========================================================
+   HOST (máy chiếu / laptop của MC)
+   ========================================================= */
+function startHost(){
+  document.title = "Monash Quiz Show — MC";
+  const app = $("#app");
+  let questions = parseQuestions(store.get("mqs_questions") || DEFAULT_QUESTIONS_TEXT).qs;
+  const players = new Map();       // id -> {name, score, conn, ans, ansAt, gain}
+  let phase = "lobby", qi = -1, qStart = 0, timerId = null, code = "", peer = null;
+
+  function joinUrl(){
+    const u = new URL(location.href); u.search = ""; u.hash = "";
+    u.searchParams.set("room", code); return u.toString();
+  }
+  function connected(){ return [...players.values()].filter(p=>p.conn && p.conn.open); }
+  function send(p, msg){ try{ if(p.conn && p.conn.open) p.conn.send(msg); }catch(e){} }
+  function broadcast(msg){ players.forEach(p=>send(p,msg)); }
+  function ranked(){ return [...players.values()].sort((a,b)=>b.score-a.score || a.name.localeCompare(b.name)); }
+  function rankOf(p){ const r = ranked(); return r.indexOf(p)+1; }
+
+  function openPeer(){
+    code = DEMO ? DEMO.room : randCode();
+    peer = new Peer(PREFIX+code, PEER_OPTS);
+    window.__mqsPeer = peer;
+    peer.on("open", ()=>{ if(phase==="lobby") renderLobby(); });
+    peer.on("error", err=>{
+      if (err.type==="unavailable-id"){ peer.destroy(); openPeer(); return; }
+      setStatus("Lỗi kết nối: "+err.type+" — kiểm tra internet rồi tải lại trang.");
+    });
+    peer.on("disconnected", ()=>{ setStatus("Mất kết nối máy chủ, đang nối lại…"); try{peer.reconnect();}catch(e){} });
+    peer.on("connection", conn=>{
+      conn.on("data", d=>onData(conn,d));
+      conn.on("close", ()=>{ if(phase==="lobby") renderLobby(); });
+    });
+  }
+
+  function onData(conn, d){
+    if (!d || typeof d!=="object") return;
+    if (d.t==="join"){
+      const name = String(d.name||"").trim().slice(0,24) || "Người chơi";
+      let p = players.get(d.id);
+      if (!p){
+        if (phase!=="lobby" && phase!=="end"){ /* cho vào giữa chừng, 0 điểm */ }
+        p = { id:d.id, name, score:0, ans:null, ansAt:0, gain:0, conn };
+        players.set(d.id, p);
+      } else { p.conn = conn; p.name = name; }
+      send(p, { t:"welcome", name:p.name, score:p.score });
+      // đưa người chơi vào đúng trạng thái hiện tại
+      if (phase==="question") sendQuestion(p);
+      else if (phase==="reveal" || phase==="board") sendResult(p);
+      else if (phase==="end") send(p, { t:"end", rank:rankOf(p), score:p.score, total:players.size });
+      if (phase==="lobby") renderLobby(); else updateAnswered();
+    }
+    if (d.t==="ans" && phase==="question" && d.qi===qi){
+      const p = players.get(d.id); if (!p || p.ans!==null) return;
+      const c = Number(d.choice); if (!(c>=0 && c<questions[qi].options.length)) return;
+      p.ans = c; p.ansAt = Date.now();
+      send(p, { t:"got" });
+      updateAnswered();
+      if (connected().every(x=>x.ans!==null)) endQuestion();
+    }
+  }
+
+  function setStatus(s){ const el=$("#status"); if(el) el.textContent=s; }
+
+  /* ----- màn hình chờ ----- */
+  function renderLobby(){
+    const url = joinUrl();
+    const isFile = location.protocol==="file:";
+    const list = [...players.values()];
+    app.innerHTML = `
+      ${topbar(`Mã phòng: <b>${code}</b>`)}
+      <div class="wrap">
+        <div class="lobby">
+          <div class="card qrbox">
+            <div style="font-size:22px;font-weight:800;margin-bottom:12px">Quét QR để tham gia</div>
+            <div id="qr"></div>
+            <div class="code">${code}</div>
+            <div class="url">${esc(url)}</div>
+            ${isFile?`<div class="warn">⚠️ Trang đang mở từ file trên máy nên điện thoại chưa vào được link này. Hãy đưa file lên GitHub Pages / Netlify rồi mở từ link đó.</div>`:""}
+          </div>
+          <div class="card">
+            <div class="players-head">
+              <h2>Người chơi đã vào</h2>
+              <div class="count">${list.length}</div>
+            </div>
+            <div class="chips">${list.length? list.map(p=>`<div class="chip">${esc(p.name)}</div>`).join("") : `<p style="color:#8a99a8;font-size:18px">Đang chờ học sinh quét mã…</p>`}</div>
+            <div class="lobby-actions">
+              <button class="btn big" id="start" ${list.length&&questions.length?"":"disabled"}>Bắt đầu (${questions.length} câu)</button>
+              <button class="btn ghost" id="edit">✏️ Đổi bộ câu hỏi</button>
+            </div>
+            <div class="status" id="status">${peer && peer.open ? "Sẵn sàng. Mỗi câu "+SECONDS_PER_QUESTION+" giây — trả lời đúng và nhanh được nhiều điểm hơn." : "Đang tạo phòng…"}</div>
+          </div>
+        </div>
+      </div>`;
+    const qr = qrcode(0,"M"); qr.addData(url); qr.make();
+    $("#qr").innerHTML = qr.createSvgTag({cellSize:8, margin:2, scalable:true});
+    $("#start").onclick = ()=>{ players.forEach(p=>{p.score=0;p.gain=0;}); qi=-1; nextQuestion(); };
+    $("#edit").onclick = renderEditor;
+    bindTop();
+  }
+
+  function renderEditor(){
+    phase = "lobby";
+    app.innerHTML = `
+      ${topbar("Đổi bộ câu hỏi")}
+      <div class="wrap"><div class="card editor">
+        <h2>Bộ câu hỏi</h2>
+        <div class="help">Mỗi câu: dòng số thứ tự + câu hỏi, các dòng <b>A.</b> <b>B.</b> <b>C.</b> (tối đa F), rồi dòng <b>Answer: X</b>. Bộ câu hỏi được lưu trên máy này cho lần sau.</div>
+        <textarea id="qt"></textarea>
+        <div class="status" id="perr" style="color:var(--bad)"></div>
+        <div class="lobby-actions">
+          <button class="btn" id="save">Lưu</button>
+          <button class="btn ghost" id="reset">Dùng lại bộ mặc định</button>
+          <button class="btn ghost" id="back">Quay lại</button>
+        </div>
+      </div></div>`;
+    $("#qt").value = store.get("mqs_questions") || DEFAULT_QUESTIONS_TEXT;
+    $("#save").onclick = ()=>{
+      const r = parseQuestions($("#qt").value);
+      if (r.errors.length){ $("#perr").textContent = r.errors.join(" · "); return; }
+      store.set("mqs_questions",$("#qt").value); questions = r.qs; renderLobby();
+    };
+    $("#reset").onclick = ()=>{ $("#qt").value = DEFAULT_QUESTIONS_TEXT; };
+    $("#back").onclick = renderLobby;
+    bindTop();
+  }
+
+  /* ----- câu hỏi ----- */
+  function sendQuestion(p){
+    const q = questions[qi];
+    const left = Math.max(0, SECONDS_PER_QUESTION*1000 - (Date.now()-qStart));
+    send(p, { t:"q", qi, total:questions.length, q:q.q, options:q.options, ms:left, answered:p.ans!==null });
+  }
+  function nextQuestion(){
+    qi++;
+    if (qi>=questions.length) return renderEnd();
+    phase = "question"; qStart = Date.now();
+    players.forEach(p=>{ p.ans=null; p.gain=0; });
+    const q = questions[qi];
+    app.innerHTML = `
+      ${topbar(`Câu ${qi+1}/${questions.length}`)}
+      <div class="wrap">
+        <div class="qtop">
+          <div class="qnum">Câu ${qi+1} / ${questions.length}</div>
+          <div class="timer" id="timer">${SECONDS_PER_QUESTION}</div>
+          <div class="answered">Đã trả lời<b id="ansc">0/${connected().length}</b></div>
+        </div>
+        <div class="qtext">${esc(q.q)}</div>
+        <div class="opts">${q.options.map((o,i)=>`<div class="opt o${i}" id="opt${i}"><div class="L">${LETTERS[i]}</div><div>${esc(o)}</div><div class="n" id="n${i}"></div><div class="barfill" id="bf${i}" style="width:0"></div></div>`).join("")}</div>
+        <div class="host-next"><button class="btn ghost" id="skip">Dừng & xem đáp án</button></div>
+      </div>`;
+    $("#skip").onclick = endQuestion;
+    bindTop();
+    players.forEach(sendQuestion);
+    clearInterval(timerId);
+    timerId = setInterval(()=>{
+      const left = Math.ceil((SECONDS_PER_QUESTION*1000-(Date.now()-qStart))/1000);
+      const el = $("#timer"); if (el) el.textContent = Math.max(0,left);
+      if (left<=0) endQuestion();
+    }, 200);
+  }
+  function updateAnswered(){
+    const el = $("#ansc"); if (!el || phase!=="question") return;
+    const c = connected(); el.textContent = `${c.filter(p=>p.ans!==null).length}/${c.length}`;
+  }
+  function endQuestion(){
+    if (phase!=="question") return;
+    clearInterval(timerId); phase = "reveal";
+    const q = questions[qi], T = SECONDS_PER_QUESTION*1000;
+    const counts = q.options.map(()=>0);
+    players.forEach(p=>{
+      if (p.ans===null) return;
+      counts[p.ans]++;
+      if (p.ans===q.correct){
+        const frac = Math.min(1, Math.max(0,(p.ansAt-qStart)/T));
+        p.gain = Math.round(MAX_POINTS - (MAX_POINTS-MIN_POINTS)*frac);
+        p.score += p.gain;
+      }
+    });
+    const totalAns = counts.reduce((a,b)=>a+b,0)||1;
+    q.options.forEach((_,i)=>{
+      $("#n"+i).textContent = counts[i];
+      $("#bf"+i).style.width = (counts[i]/totalAns*100)+"%";
+      $("#opt"+i).classList.add(i===q.correct?"right":"dim");
+    });
+    $("#timer").textContent = "✓";
+    $(".host-next").innerHTML = `<button class="btn big" id="toBoard">Bảng xếp hạng →</button>`;
+    $("#toBoard").onclick = renderBoard;
+    players.forEach(sendResult);
+  }
+  function sendResult(p){
+    const q = questions[qi];
+    send(p, { t:"res", correct:p.ans===q.correct, answered:p.ans!==null, gain:p.gain, score:p.score, rank:rankOf(p), total:players.size, right:LETTERS[q.correct]+". "+q.options[q.correct] });
+  }
+
+  /* ----- bảng xếp hạng ----- */
+  function renderBoard(){
+    phase = "board";
+    const top = ranked().slice(0,5);
+    const last = qi>=questions.length-1;
+    app.innerHTML = `
+      ${topbar(`Sau câu ${qi+1}/${questions.length}`)}
+      <div class="wrap board">
+        <h2>🏆 Bảng xếp hạng</h2>
+        ${top.map((p,i)=>`<div class="row" style="animation-delay:${i*.08}s"><div class="r">#${i+1}</div><div>${esc(p.name)}</div><div class="s">${p.score}</div><div class="g">${p.gain?"+"+p.gain:""}</div></div>`).join("") || `<p style="text-align:center">Chưa có người chơi</p>`}
+        <div class="host-next"><button class="btn big" id="next">${last?"Xem kết quả chung cuộc →":"Câu tiếp theo →"}</button></div>
+      </div>`;
+    $("#next").onclick = nextQuestion;
+    bindTop();
+  }
+
+  /* ----- chung cuộc ----- */
+  function renderEnd(){
+    phase = "end"; clearInterval(timerId);
+    const r = ranked();
+    const pod = (p,cls,n)=> p?`<div class="pod ${cls}"><div class="nm">${esc(p.name)}</div><div class="sc">${p.score} điểm</div><div class="blk">${n}</div></div>`:"";
+    app.innerHTML = `
+      ${topbar("Kết quả chung cuộc")}
+      <div class="wrap board">
+        <h2>🎉 Chúc mừng người chiến thắng!</h2>
+        <div class="podium">${pod(r[1],"p2",2)}${pod(r[0],"p1",1)}${pod(r[2],"p3",3)}</div>
+        ${r.slice(3,10).map((p,i)=>`<div class="row"><div class="r">#${i+4}</div><div>${esc(p.name)}</div><div class="s">${p.score}</div></div>`).join("")}
+        <div class="host-next">
+          <button class="btn ghost" id="again">Chơi lại (giữ người chơi)</button>
+          <button class="btn" id="newroom">Phòng mới</button>
+        </div>
+      </div>`;
+    players.forEach(p=>send(p,{ t:"end", rank:rankOf(p), score:p.score, total:players.size }));
+    $("#again").onclick = ()=>{ players.forEach(p=>{p.score=0;p.gain=0;p.ans=null;}); phase="lobby"; broadcast({t:"lobby"}); renderLobby(); };
+    $("#newroom").onclick = ()=>location.reload();
+    bindTop();
+  }
+
+  /* ----- thanh trên ----- */
+  function topbar(meta){
+    return `<div class="bar"><div class="brand">MONASH <span>Quiz Show</span></div><div class="meta">${meta} <button id="fs">⛶ Toàn màn hình</button></div></div>`;
+  }
+  function bindTop(){
+    const b = $("#fs"); if (!b) return;
+    b.onclick = ()=>{ try{ document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen(); }catch(e){} };
+  }
+
+  if (typeof Peer==="undefined"){
+    app.innerHTML = `<div class="wrap"><div class="card"><h2>Không tải được thư viện kết nối</h2><p>Hãy kiểm tra internet rồi tải lại trang.</p></div></div>`;
+    return;
+  }
+  openPeer(); renderLobby();
+}
+
+/* =========================================================
+   PLAYER (điện thoại học sinh)
+   ========================================================= */
+function startPlayer(code){
+  document.title = "Monash Quiz — Tham gia";
+  document.body.classList.add("phone-body");
+  const app = $("#app");
+  let myId = store.get("mqs_pid"); if (!myId){ myId = rid(); store.set("mqs_pid", myId); }
+  let myName = (DEMO && DEMO.name) || store.get("mqs_name") || "";
+  if (DEMO) myId = "demo-"+DEMO.name;
+  let peer = null, conn = null, joined = false, curQ = -1, countdown = null, retry = null;
+
+  function shell(inner){
+    app.innerHTML = `<div class="phone"><div class="bar"><div class="brand">MONASH <span>Quiz Show</span></div><div class="meta">${joined?esc(myName):"Phòng "+esc(code)}</div></div><div class="pbody">${inner}</div></div>`;
+  }
+
+  function renderJoin(err){
+    shell(`
+      <h1>Tham gia Monash Quiz</h1>
+      <p>Nhập tên của bạn (để MC trao quà đúng người nhé!)</p>
+      <input class="inp" id="nm" maxlength="24" placeholder="Họ tên" value="${esc(myName)}" autocomplete="name">
+      <button class="btn big" id="go">Vào chơi</button>
+      ${err?`<p style="color:var(--bad)">${esc(err)}</p>`:""}`);
+    const go = ()=>{
+      const v = $("#nm").value.trim();
+      if (!v){ $("#nm").focus(); return; }
+      myName = v; store.set("mqs_name", v); connect();
+    };
+    $("#go").onclick = go;
+    $("#nm").onkeydown = e=>{ if(e.key==="Enter") go(); };
+  }
+
+  function renderWait(title, sub){
+    shell(`<div class="spinner"></div><h1>${title}</h1><p>${sub||""}</p>`);
+  }
+
+  function connect(){
+    renderWait("Đang kết nối…","Giữ màn hình mở nhé");
+    if (typeof Peer==="undefined"){ renderJoin("Không tải được thư viện — kiểm tra internet."); return; }
+    if (!peer || peer.destroyed){
+      peer = new Peer(PEER_OPTS);
+      peer.on("open", openConn);
+      peer.on("error", err=>{
+        if (err.type==="peer-unavailable"){ renderJoin("Không tìm thấy phòng "+code+". Hãy quét lại mã QR trên màn hình."); return; }
+        scheduleRetry();
+      });
+      peer.on("disconnected", ()=>{ try{peer.reconnect();}catch(e){} });
+    } else openConn();
+  }
+  function openConn(){
+    try{ if (conn) conn.close(); }catch(e){}
+    conn = peer.connect(PREFIX+code, { reliable:true });
+    conn.on("open", ()=>{ clearTimeout(retry); conn.send({ t:"join", id:myId, name:myName }); });
+    conn.on("data", onMsg);
+    conn.on("close", ()=>{ if (joined){ renderWait("Mất kết nối…","Đang thử kết nối lại"); scheduleRetry(); } });
+    conn.on("error", scheduleRetry);
+  }
+  function scheduleRetry(){ clearTimeout(retry); retry = setTimeout(()=>{ if(!peer||peer.destroyed){ peer=null; connect(); } else openConn(); }, 2500); }
+
+  function onMsg(d){
+    if (!d || typeof d!=="object") return;
+    if (d.t==="welcome"){ joined = true; myName = d.name; renderWait("Bạn đã vào phòng! 🎉", `Xin chào <span class="pname">${esc(myName)}</span>. Nhìn lên màn hình lớn, chờ MC bắt đầu nhé.`); }
+    if (d.t==="lobby"){ renderWait("Ván mới sắp bắt đầu","Chờ MC nhé"); }
+    if (d.t==="q"){ curQ = d.qi; d.answered ? renderWait("Đã gửi đáp án!","Chờ các bạn khác…") : renderQuestion(d); }
+    if (d.t==="got"){ stopCountdown(); renderWait("Đã gửi đáp án!","Chờ các bạn khác…"); }
+    if (d.t==="res"){ stopCountdown(); renderResult(d); }
+    if (d.t==="end"){ stopCountdown(); renderEnd(d); }
+  }
+
+  function stopCountdown(){ clearInterval(countdown); }
+  function renderQuestion(d){
+    const until = Date.now()+d.ms;
+    shell(`
+      <div class="pt">Câu ${d.qi+1}/${d.total} · <b id="pt">${Math.ceil(d.ms/1000)}</b> giây</div>
+      <div class="pq">${esc(d.q)}</div>
+      <div class="popts">${d.options.map((o,i)=>`<button class="popt o${i}" data-i="${i}"><span class="L">${LETTERS[i]}</span><span>${esc(o)}</span></button>`).join("")}</div>`);
+    app.querySelectorAll(".popt").forEach(b=>b.onclick = ()=>{
+      app.querySelectorAll(".popt").forEach(x=>x.disabled=true);
+      try{ conn.send({ t:"ans", id:myId, qi:d.qi, choice:Number(b.dataset.i) }); }catch(e){}
+      if (navigator.vibrate) try{navigator.vibrate(40);}catch(e){}
+      renderWait("Đang gửi…","");
+    });
+    stopCountdown();
+    countdown = setInterval(()=>{
+      const s = Math.max(0, Math.ceil((until-Date.now())/1000));
+      const el = $("#pt"); if (el) el.textContent = s;
+      if (s<=0){ stopCountdown(); renderWait("Hết giờ!","Nhìn lên màn hình để xem đáp án"); }
+    }, 250);
+  }
+
+  function renderResult(d){
+    const cls = d.correct?"ok":(d.answered?"bad":"neutral");
+    const head = d.correct?"Chính xác! ✅":(d.answered?"Chưa đúng ❌":"Bạn chưa trả lời ⏱️");
+    shell(`
+      <div class="result ${cls}">
+        <div class="big">${head}</div>
+        <div class="sub">${d.correct?"+"+d.gain+" điểm":"Đáp án: "+esc(d.right)}</div>
+      </div>
+      <p>Tổng điểm: <b>${d.score}</b> · Hạng hiện tại: <b>#${d.rank}</b>/${d.total}</p>`);
+  }
+
+  function renderEnd(d){
+    shell(`
+      <p>Kết quả chung cuộc của</p>
+      <h1 class="pname">${esc(myName)}</h1>
+      <div class="final-rank">#${d.rank}</div>
+      <p>trên ${d.total} người chơi · <b>${d.score}</b> điểm</p>
+      ${d.rank<=3?`<div class="result ok"><div class="big">🎁 Bạn có quà!</div><div class="sub">Lên sân khấu và đưa màn hình này cho MC nhé</div></div>`:`<p>Cảm ơn bạn đã tham gia! Tìm hiểu thêm về Monash tại monash.edu</p>`}`);
+  }
+
+  myName ? connect() : renderJoin();
+}
+</script>
+</body>
+</html>
