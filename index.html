@@ -4,7 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Monash Quiz Show</title>
-<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script>window.mqtt||document.write('<script src="https://unpkg.com/mqtt@5/dist/mqtt.min.js"><\/script>')</script>
 <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
 <style>
   :root{
@@ -117,12 +118,14 @@
 <body>
 <div id="app"></div>
 
+
 <script>
 /* =========================================================
    MONASH QUIZ SHOW — chơi nhiều người qua QR, không cần tài khoản
-   - Mở trang bình thường  => màn hình MC (host)
-   - Mở trang với ?room=XXXX => màn hình người chơi (điện thoại)
-   Bộ câu hỏi mặc định ở dưới; MC có thể dán bộ mới ngay trên màn hình chờ.
+   - Mở trang bình thường        => màn hình MC (host)
+   - Mở trang với ?room=XXXXX    => màn hình người chơi (điện thoại)
+   Kết nối: qua máy chủ MQTT công cộng miễn phí (WebSocket bảo mật),
+   nên chạy được trên wifi lẫn 4G, không cần nối thẳng giữa các máy.
    ========================================================= */
 
 const DEFAULT_QUESTIONS_TEXT = `1. Where is Monash University primarily located?
@@ -158,8 +161,13 @@ Answer: C`;
 const SECONDS_PER_QUESTION = 20;   // thời gian mỗi câu
 const MAX_POINTS = 1000;           // trả lời đúng ngay lập tức
 const MIN_POINTS = 500;            // trả lời đúng ở giây cuối
-const PREFIX = "monash-quiz-show-";
 const LETTERS = "ABCDEF";
+const BROKERS = [
+  "wss://broker.hivemq.com:8884/mqtt",
+  "wss://broker.emqx.io:8084/mqtt",
+  "wss://test.mosquitto.org:8081/mqtt"
+];
+const TOPIC_ROOT = "monash-quiz-show/v2/";
 
 /* ---------- tiện ích ---------- */
 const $ = (s, el=document) => el.querySelector(s);
@@ -169,8 +177,9 @@ const store = {
   set(k,v){ try{ localStorage.setItem(k,v); }catch(e){} }
 };
 function randCode(n=5){ const a="ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; let s=""; for(let i=0;i<n;i++) s+=a[Math.floor(Math.random()*a.length)]; return s; }
-function rid(){ return Math.random().toString(36).slice(2)+Date.now().toString(36); }
-const PEER_OPTS = { config:{ iceServers:[ {urls:"stun:stun.l.google.com:19302"}, {urls:"stun:stun1.l.google.com:19302"} ] } };
+function rid(){ return Math.random().toString(36).slice(2,10)+Date.now().toString(36); }
+function mqttOpts(){ return { clientId:"mqs_"+rid(), clean:true, connectTimeout:7000, reconnectPeriod:2000, keepalive:30 }; }
+function parseMsg(buf){ try{ return JSON.parse(typeof buf==="string"?buf:new TextDecoder().decode(buf)); }catch(e){ return null; } }
 
 function parseQuestions(text){
   const qs = []; let cur = null;
@@ -196,40 +205,12 @@ function parseQuestions(text){
   return { qs, errors };
 }
 
-/* ----- chế độ thử (demo): giả lập mạng qua trang mẹ, không dùng ở bản thật ----- */
-const DEMO = window.MQS_DEMO || null;
-if (DEMO){
-  class FakeConn{
-    constructor(cid, peerId, remote){ this.cid=cid; this.peerId=peerId; this.remote=remote; this.open=false; this.h={}; }
-    on(e,f){ (this.h[e]=this.h[e]||[]).push(f); }
-    emit(e,a){ (this.h[e]||[]).forEach(f=>f(a)); }
-    send(d){ parent.postMessage({mqs:"data", cid:this.cid, to:this.remote, d:JSON.parse(JSON.stringify(d))}, "*"); }
-    close(){ this.open=false; }
-  }
-  const conns = {};
-  window.Peer = class{
-    constructor(id){ this.id = typeof id==="string" ? id : "p-"+Math.random().toString(36).slice(2); this.h={}; this.open=false; this.destroyed=false;
-      parent.postMessage({mqs:"hello", id:this.id}, "*");
-      setTimeout(()=>{ this.open=true; this.emit("open", this.id); }, 50); }
-    on(e,f){ (this.h[e]=this.h[e]||[]).push(f); }
-    emit(e,a){ (this.h[e]||[]).forEach(f=>f(a)); }
-    connect(remote){ const cid=this.id+"~"+Math.random().toString(36).slice(2); const c=new FakeConn(cid,this.id,remote); conns[cid]=c;
-      parent.postMessage({mqs:"connect", cid, from:this.id, to:remote}, "*"); return c; }
-    reconnect(){} destroy(){ this.destroyed=true; }
-  };
-  window.addEventListener("message", ev=>{
-    const m = ev.data; if (!m || !m.mqs) return;
-    if (m.mqs==="incoming"){ const c=new FakeConn(m.cid, m.to, m.from); c.open=true; conns[m.cid]=c;
-      const p = window.__mqsPeer; if (p) p.emit("connection", c); setTimeout(()=>c.emit("open"),10);
-      parent.postMessage({mqs:"accepted", cid:m.cid, to:m.from}, "*"); }
-    if (m.mqs==="accepted"){ const c=conns[m.cid]; if (c){ c.open=true; c.emit("open"); } }
-    if (m.mqs==="data"){ const c=conns[m.cid]; if (c) c.emit("data", m.d); }
-  });
-}
-
 const params = new URLSearchParams(location.search);
-const ROOM = DEMO ? (DEMO.role==="player" ? DEMO.room : "") : (params.get("room")||"").toUpperCase().trim();
-if (ROOM) startPlayer(ROOM); else startHost();
+const ROOM = (params.get("room")||"").toUpperCase().trim();
+if (typeof mqtt==="undefined"){
+  $("#app").innerHTML = `<div class="wrap"><div class="card"><h2>Không tải được thư viện kết nối</h2><p>Hãy kiểm tra internet rồi tải lại trang.</p></div></div>`;
+} else if (ROOM) startPlayer(ROOM, Number(params.get("b"))||0);
+else startHost();
 
 /* =========================================================
    HOST (máy chiếu / laptop của MC)
@@ -238,57 +219,60 @@ function startHost(){
   document.title = "Monash Quiz Show — MC";
   const app = $("#app");
   let questions = parseQuestions(store.get("mqs_questions") || DEFAULT_QUESTIONS_TEXT).qs;
-  const players = new Map();       // id -> {name, score, conn, ans, ansAt, gain}
-  let phase = "lobby", qi = -1, qStart = 0, timerId = null, code = "", peer = null;
+  const players = new Map();       // id -> {id, name, score, ans, ansAt, gain, seen}
+  let phase = "lobby", qi = -1, qStart = 0, timerId = null;
+  let code = randCode(), base = TOPIC_ROOT+code+"/", client = null, brokerIdx = -1, online = false;
+
+  /* ----- kết nối máy chủ trung gian ----- */
+  function tryBroker(i){
+    if (i>=BROKERS.length){ setStatus("Không kết nối được máy chủ. Kiểm tra internet của laptop rồi tải lại trang (F5)."); return; }
+    const c = mqtt.connect(BROKERS[i], mqttOpts());
+    let ok = false;
+    const giveUp = setTimeout(()=>{ if(!ok){ try{c.end(true);}catch(e){} tryBroker(i+1); } }, 8000);
+    c.on("connect", ()=>{
+      online = true;
+      c.subscribe(base+"h", {qos:1});
+      if (!ok){ ok = true; clearTimeout(giveUp); client = c; brokerIdx = i; if (phase==="lobby") renderLobby(); }
+      setStatus(readyText());
+    });
+    c.on("message", (t, buf)=>{ const d = parseMsg(buf); if (d) onData(d); });
+    c.on("offline", ()=>{ online = false; if (ok) setStatus("Laptop mất mạng, đang kết nối lại…"); });
+    c.on("error", ()=>{});
+  }
+  function readyText(){ return "Sẵn sàng. Mỗi câu "+SECONDS_PER_QUESTION+" giây — trả lời đúng và nhanh được nhiều điểm hơn."; }
 
   function joinUrl(){
     const u = new URL(location.href); u.search = ""; u.hash = "";
-    u.searchParams.set("room", code); return u.toString();
+    u.searchParams.set("room", code);
+    if (brokerIdx>0) u.searchParams.set("b", brokerIdx);
+    return u.toString();
   }
-  function connected(){ return [...players.values()].filter(p=>p.conn && p.conn.open); }
-  function send(p, msg){ try{ if(p.conn && p.conn.open) p.conn.send(msg); }catch(e){} }
-  function broadcast(msg){ players.forEach(p=>send(p,msg)); }
+  function connected(){ const now=Date.now(); return [...players.values()].filter(p=>now-p.seen<30000); }
+  function send(p, msg){ if (client) client.publish(base+"p/"+p.id, JSON.stringify(msg), {qos:1}); }
+  function broadcast(msg){ if (client) client.publish(base+"all", JSON.stringify(msg), {qos:1}); }
   function ranked(){ return [...players.values()].sort((a,b)=>b.score-a.score || a.name.localeCompare(b.name)); }
-  function rankOf(p){ const r = ranked(); return r.indexOf(p)+1; }
+  function rankOf(p){ return ranked().indexOf(p)+1; }
 
-  function openPeer(){
-    code = DEMO ? DEMO.room : randCode();
-    peer = new Peer(PREFIX+code, PEER_OPTS);
-    window.__mqsPeer = peer;
-    peer.on("open", ()=>{ if(phase==="lobby") renderLobby(); });
-    peer.on("error", err=>{
-      if (err.type==="unavailable-id"){ peer.destroy(); openPeer(); return; }
-      setStatus("Lỗi kết nối: "+err.type+" — kiểm tra internet rồi tải lại trang.");
-    });
-    peer.on("disconnected", ()=>{ setStatus("Mất kết nối máy chủ, đang nối lại…"); try{peer.reconnect();}catch(e){} });
-    peer.on("connection", conn=>{
-      conn.on("data", d=>onData(conn,d));
-      conn.on("close", ()=>{ if(phase==="lobby") renderLobby(); });
-    });
-  }
-
-  function onData(conn, d){
-    if (!d || typeof d!=="object") return;
+  function onData(d){
+    if (!d || typeof d!=="object" || typeof d.id!=="string") return;
+    const p0 = players.get(d.id); if (p0) p0.seen = Date.now();
     if (d.t==="join"){
       const name = String(d.name||"").trim().slice(0,24) || "Người chơi";
-      let p = players.get(d.id);
-      if (!p){
-        if (phase!=="lobby" && phase!=="end"){ /* cho vào giữa chừng, 0 điểm */ }
-        p = { id:d.id, name, score:0, ans:null, ansAt:0, gain:0, conn };
-        players.set(d.id, p);
-      } else { p.conn = conn; p.name = name; }
+      let p = p0, isNew = false;
+      if (!p){ p = { id:d.id, name, score:0, ans:null, ansAt:0, gain:0, seen:Date.now() }; players.set(d.id, p); isNew = true; }
+      else p.name = name;
       send(p, { t:"welcome", name:p.name, score:p.score });
-      // đưa người chơi vào đúng trạng thái hiện tại
       if (phase==="question") sendQuestion(p);
       else if (phase==="reveal" || phase==="board") sendResult(p);
       else if (phase==="end") send(p, { t:"end", rank:rankOf(p), score:p.score, total:players.size });
-      if (phase==="lobby") renderLobby(); else updateAnswered();
+      if (phase==="lobby"){ if (isNew) renderPlayers(); } else updateAnswered();
     }
     if (d.t==="ans" && phase==="question" && d.qi===qi){
-      const p = players.get(d.id); if (!p || p.ans!==null) return;
+      const p = players.get(d.id); if (!p) return;
+      if (p.ans!==null){ send(p, {t:"got", qi}); return; }
       const c = Number(d.choice); if (!(c>=0 && c<questions[qi].options.length)) return;
       p.ans = c; p.ansAt = Date.now();
-      send(p, { t:"got" });
+      send(p, { t:"got", qi });
       updateAnswered();
       if (connected().every(x=>x.ans!==null)) endQuestion();
     }
@@ -298,43 +282,50 @@ function startHost(){
 
   /* ----- màn hình chờ ----- */
   function renderLobby(){
-    const url = joinUrl();
+    phase = "lobby";
+    const ready = !!client;
+    const url = ready ? joinUrl() : "";
     const isFile = location.protocol==="file:";
-    const list = [...players.values()];
     app.innerHTML = `
       ${topbar(`Mã phòng: <b>${code}</b>`)}
       <div class="wrap">
         <div class="lobby">
           <div class="card qrbox">
             <div style="font-size:22px;font-weight:800;margin-bottom:12px">Quét QR để tham gia</div>
-            <div id="qr"></div>
+            <div id="qr">${ready?"":`<div class="spinner" style="margin:80px auto"></div>`}</div>
             <div class="code">${code}</div>
             <div class="url">${esc(url)}</div>
-            ${isFile?`<div class="warn">⚠️ Trang đang mở từ file trên máy nên điện thoại chưa vào được link này. Hãy đưa file lên GitHub Pages / Netlify rồi mở từ link đó.</div>`:""}
+            ${isFile?`<div class="warn">⚠️ Trang đang mở từ file trên máy nên điện thoại chưa vào được link này. Hãy mở game từ link GitHub Pages.</div>`:""}
           </div>
           <div class="card">
             <div class="players-head">
               <h2>Người chơi đã vào</h2>
-              <div class="count">${list.length}</div>
+              <div class="count" id="pcount">0</div>
             </div>
-            <div class="chips">${list.length? list.map(p=>`<div class="chip">${esc(p.name)}</div>`).join("") : `<p style="color:#8a99a8;font-size:18px">Đang chờ học sinh quét mã…</p>`}</div>
+            <div class="chips" id="chips"></div>
             <div class="lobby-actions">
-              <button class="btn big" id="start" ${list.length&&questions.length?"":"disabled"}>Bắt đầu (${questions.length} câu)</button>
+              <button class="btn big" id="start" disabled>Bắt đầu (${questions.length} câu)</button>
               <button class="btn ghost" id="edit">✏️ Đổi bộ câu hỏi</button>
             </div>
-            <div class="status" id="status">${peer && peer.open ? "Sẵn sàng. Mỗi câu "+SECONDS_PER_QUESTION+" giây — trả lời đúng và nhanh được nhiều điểm hơn." : "Đang tạo phòng…"}</div>
+            <div class="status" id="status">${ready ? readyText() : "Đang tạo phòng…"}</div>
           </div>
         </div>
       </div>`;
-    const qr = qrcode(0,"M"); qr.addData(url); qr.make();
-    $("#qr").innerHTML = qr.createSvgTag({cellSize:8, margin:2, scalable:true});
+    if (ready){ const qr = qrcode(0,"M"); qr.addData(url); qr.make(); $("#qr").innerHTML = qr.createSvgTag({cellSize:8, margin:2, scalable:true}); }
     $("#start").onclick = ()=>{ players.forEach(p=>{p.score=0;p.gain=0;}); qi=-1; nextQuestion(); };
     $("#edit").onclick = renderEditor;
-    bindTop();
+    renderPlayers(); bindTop();
+  }
+  function renderPlayers(){
+    const list = [...players.values()];
+    const chips = $("#chips"); if (!chips) return;
+    chips.innerHTML = list.length ? list.map(p=>`<div class="chip">${esc(p.name)}</div>`).join("") : `<p style="color:#8a99a8;font-size:18px">Đang chờ học sinh quét mã…</p>`;
+    $("#pcount").textContent = list.length;
+    $("#start").disabled = !(list.length && questions.length);
   }
 
   function renderEditor(){
-    phase = "lobby";
+    phase = "edit";
     app.innerHTML = `
       ${topbar("Đổi bộ câu hỏi")}
       <div class="wrap"><div class="card editor">
@@ -424,7 +415,7 @@ function startHost(){
   }
   function sendResult(p){
     const q = questions[qi];
-    send(p, { t:"res", correct:p.ans===q.correct, answered:p.ans!==null, gain:p.gain, score:p.score, rank:rankOf(p), total:players.size, right:LETTERS[q.correct]+". "+q.options[q.correct] });
+    send(p, { t:"res", qi, correct:p.ans===q.correct, answered:p.ans!==null, gain:p.gain, score:p.score, rank:rankOf(p), total:players.size, right:LETTERS[q.correct]+". "+q.options[q.correct] });
   }
 
   /* ----- bảng xếp hạng ----- */
@@ -460,7 +451,7 @@ function startHost(){
         </div>
       </div>`;
     players.forEach(p=>send(p,{ t:"end", rank:rankOf(p), score:p.score, total:players.size }));
-    $("#again").onclick = ()=>{ players.forEach(p=>{p.score=0;p.gain=0;p.ans=null;}); phase="lobby"; broadcast({t:"lobby"}); renderLobby(); };
+    $("#again").onclick = ()=>{ players.forEach(p=>{p.score=0;p.gain=0;p.ans=null;}); broadcast({t:"lobby"}); renderLobby(); };
     $("#newroom").onclick = ()=>location.reload();
     bindTop();
   }
@@ -474,36 +465,32 @@ function startHost(){
     b.onclick = ()=>{ try{ document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen(); }catch(e){} };
   }
 
-  if (typeof Peer==="undefined"){
-    app.innerHTML = `<div class="wrap"><div class="card"><h2>Không tải được thư viện kết nối</h2><p>Hãy kiểm tra internet rồi tải lại trang.</p></div></div>`;
-    return;
-  }
-  openPeer(); renderLobby();
+  renderLobby();
+  tryBroker(0);
+  // dọn danh sách "đang online" định kỳ trong lúc trả lời
+  setInterval(updateAnswered, 3000);
 }
 
 /* =========================================================
    PLAYER (điện thoại học sinh)
    ========================================================= */
-function startPlayer(code){
+function startPlayer(code, b){
   document.title = "Monash Quiz — Tham gia";
-  document.body.classList.add("phone-body");
   const app = $("#app");
+  const base = TOPIC_ROOT+code+"/";
   let myId = store.get("mqs_pid"); if (!myId){ myId = rid(); store.set("mqs_pid", myId); }
-  let myName = (DEMO && DEMO.name) || store.get("mqs_name") || "";
-  if (DEMO) myId = "demo-"+DEMO.name;
-  let peer = null, conn = null, joined = false, curQ = -1, countdown = null, retry = null;
+  let myName = store.get("mqs_name") || "";
+  let client = null, welcomed = false, joinTimer = null, joinStarted = 0, countdown = null, lastQ = -1, answeredQ = -1;
 
   function shell(inner){
-    app.innerHTML = `<div class="phone"><div class="bar"><div class="brand">MONASH <span>Quiz Show</span></div><div class="meta">${joined?esc(myName):"Phòng "+esc(code)}</div></div><div class="pbody">${inner}</div></div>`;
+    app.innerHTML = `<div class="phone"><div class="bar"><div class="brand">MONASH <span>Quiz Show</span></div><div class="meta">${welcomed?esc(myName):"Phòng "+esc(code)}</div></div><div class="pbody">${inner}</div></div>`;
   }
-
-  function renderJoin(err){
+  function renderJoin(){
     shell(`
       <h1>Tham gia Monash Quiz</h1>
       <p>Nhập tên của bạn (để MC trao quà đúng người nhé!)</p>
       <input class="inp" id="nm" maxlength="24" placeholder="Họ tên" value="${esc(myName)}" autocomplete="name">
-      <button class="btn big" id="go">Vào chơi</button>
-      ${err?`<p style="color:var(--bad)">${esc(err)}</p>`:""}`);
+      <button class="btn big" id="go">Vào chơi</button>`);
     const go = ()=>{
       const v = $("#nm").value.trim();
       if (!v){ $("#nm").focus(); return; }
@@ -512,40 +499,46 @@ function startPlayer(code){
     $("#go").onclick = go;
     $("#nm").onkeydown = e=>{ if(e.key==="Enter") go(); };
   }
+  function renderWait(title, sub){ shell(`<div class="spinner"></div><h1>${title}</h1><p>${sub||""}</p>`); }
 
-  function renderWait(title, sub){
-    shell(`<div class="spinner"></div><h1>${title}</h1><p>${sub||""}</p>`);
-  }
+  function pub(msg){ if (client) client.publish(base+"h", JSON.stringify(Object.assign({id:myId}, msg)), {qos:1}); }
 
   function connect(){
     renderWait("Đang kết nối…","Giữ màn hình mở nhé");
-    if (typeof Peer==="undefined"){ renderJoin("Không tải được thư viện — kiểm tra internet."); return; }
-    if (!peer || peer.destroyed){
-      peer = new Peer(PEER_OPTS);
-      peer.on("open", openConn);
-      peer.on("error", err=>{
-        if (err.type==="peer-unavailable"){ renderJoin("Không tìm thấy phòng "+code+". Hãy quét lại mã QR trên màn hình."); return; }
-        scheduleRetry();
-      });
-      peer.on("disconnected", ()=>{ try{peer.reconnect();}catch(e){} });
-    } else openConn();
+    if (client) return;
+    client = mqtt.connect(BROKERS[b] || BROKERS[0], mqttOpts());
+    client.on("connect", ()=>{
+      client.subscribe([base+"all", base+"p/"+myId], {qos:1}, ()=>startJoin());
+    });
+    client.on("message", (t, buf)=>{ const d = parseMsg(buf); if (d) onMsg(d); });
+    client.on("offline", ()=>{ welcomed = false; renderWait("Mất kết nối…","Đang thử kết nối lại, giữ màn hình mở nhé"); });
+    client.on("error", ()=>{});
+    setInterval(()=>{ if (welcomed) pub({t:"ping"}); }, 8000);
   }
-  function openConn(){
-    try{ if (conn) conn.close(); }catch(e){}
-    conn = peer.connect(PREFIX+code, { reliable:true });
-    conn.on("open", ()=>{ clearTimeout(retry); conn.send({ t:"join", id:myId, name:myName }); });
-    conn.on("data", onMsg);
-    conn.on("close", ()=>{ if (joined){ renderWait("Mất kết nối…","Đang thử kết nối lại"); scheduleRetry(); } });
-    conn.on("error", scheduleRetry);
+  function startJoin(){
+    welcomed = false; joinStarted = Date.now();
+    clearInterval(joinTimer);
+    const tick = ()=>{
+      if (welcomed){ clearInterval(joinTimer); return; }
+      pub({ t:"join", name:myName });
+      if (Date.now()-joinStarted > 9000) renderWait("Chưa thấy phòng "+esc(code), "Hãy chắc chắn màn hình MC đang mở. Nếu MC vừa mở phòng mới, hãy quét lại mã QR trên màn hình.");
+    };
+    tick(); joinTimer = setInterval(tick, 3000);
   }
-  function scheduleRetry(){ clearTimeout(retry); retry = setTimeout(()=>{ if(!peer||peer.destroyed){ peer=null; connect(); } else openConn(); }, 2500); }
 
   function onMsg(d){
     if (!d || typeof d!=="object") return;
-    if (d.t==="welcome"){ joined = true; myName = d.name; renderWait("Bạn đã vào phòng! 🎉", `Xin chào <span class="pname">${esc(myName)}</span>. Nhìn lên màn hình lớn, chờ MC bắt đầu nhé.`); }
-    if (d.t==="lobby"){ renderWait("Ván mới sắp bắt đầu","Chờ MC nhé"); }
-    if (d.t==="q"){ curQ = d.qi; d.answered ? renderWait("Đã gửi đáp án!","Chờ các bạn khác…") : renderQuestion(d); }
-    if (d.t==="got"){ stopCountdown(); renderWait("Đã gửi đáp án!","Chờ các bạn khác…"); }
+    if (d.t==="welcome"){
+      const first = !welcomed; welcomed = true; clearInterval(joinTimer); myName = d.name;
+      if (first) renderWait("Bạn đã vào phòng! 🎉", `Xin chào <span class="pname">${esc(myName)}</span>. Nhìn lên màn hình lớn, chờ MC bắt đầu nhé.`);
+    }
+    if (d.t==="lobby"){ answeredQ = -1; lastQ = -1; renderWait("Ván mới sắp bắt đầu","Chờ MC nhé"); }
+    if (d.t==="q"){
+      if (d.answered || answeredQ===d.qi){ answeredQ = d.qi; renderWait("Đã gửi đáp án!","Chờ các bạn khác…"); }
+      else if (lastQ!==d.qi) renderQuestion(d);
+      lastQ = d.qi;
+    }
+    if (d.t==="got"){ answeredQ = d.qi; stopCountdown(); renderWait("Đã gửi đáp án!","Chờ các bạn khác…"); }
     if (d.t==="res"){ stopCountdown(); renderResult(d); }
     if (d.t==="end"){ stopCountdown(); renderEnd(d); }
   }
@@ -557,10 +550,11 @@ function startPlayer(code){
       <div class="pt">Câu ${d.qi+1}/${d.total} · <b id="pt">${Math.ceil(d.ms/1000)}</b> giây</div>
       <div class="pq">${esc(d.q)}</div>
       <div class="popts">${d.options.map((o,i)=>`<button class="popt o${i}" data-i="${i}"><span class="L">${LETTERS[i]}</span><span>${esc(o)}</span></button>`).join("")}</div>`);
-    app.querySelectorAll(".popt").forEach(b=>b.onclick = ()=>{
+    app.querySelectorAll(".popt").forEach(btn=>btn.onclick = ()=>{
       app.querySelectorAll(".popt").forEach(x=>x.disabled=true);
-      try{ conn.send({ t:"ans", id:myId, qi:d.qi, choice:Number(b.dataset.i) }); }catch(e){}
+      pub({ t:"ans", qi:d.qi, choice:Number(btn.dataset.i) });
       if (navigator.vibrate) try{navigator.vibrate(40);}catch(e){}
+      stopCountdown();
       renderWait("Đang gửi…","");
     });
     stopCountdown();
